@@ -38,12 +38,12 @@
     <div id="root"></div>
 
     <script type="text/babel" data-type="module">
-        // --- Firebase Imports ---
+        // --- Firebase Imports (CDN 방식 - 브라우저 직접 실행용) ---
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, addDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- Icon Components (Inline SVGs to replace lucide-react) ---
+        // --- Icon Components (Inline SVGs) ---
         const IconBase = ({ children, className }) => (
             <svg 
                 xmlns="http://www.w3.org/2000/svg" 
@@ -67,6 +67,7 @@
         const Award = ({ className }) => <IconBase className={className}><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></IconBase>;
         const RotateCcw = ({ className }) => <IconBase className={className}><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></IconBase>;
         const Users = ({ className }) => <IconBase className={className}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></IconBase>;
+        const AlertTriangle = ({ className }) => <IconBase className={className}><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></IconBase>;
 
         // --- Data ---
         const TOEIC_DATA = [
@@ -102,8 +103,8 @@
           { id: 30, word: "Terminate", meaning: "종료하다", options: ["종료하다", "기간", "결정하다", "모방하다"] },
         ];
 
-        // --- Firebase Init ---
-        const apiKey = ""; // Provided by environment
+        // --- Firebase Configuration (사용자 설정 우선) ---
+        // 환경 변수가 있으면 사용하고, 없으면 사용자가 제공한 설정(toic-study)을 사용합니다.
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
             apiKey: "AIzaSyCvJyMMT0TCiiFgHvXwAjmj_Vup0AXH2J0",
             authDomain: "toic-study.firebaseapp.com",
@@ -118,7 +119,9 @@
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
-        // Use global app ID if available, otherwise default string
+        
+        // App ID 설정: 환경변수가 없으면 기본값 사용. 
+        // 주의: GitHub Pages 등 외부 배포 시 이 기본값이 데이터 저장 경로가 됩니다.
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'toic-study-app';
 
         // --- Main Component ---
@@ -126,7 +129,7 @@
             const { useState, useEffect } = React;
             
             const [user, setUser] = useState(null);
-            const [gameState, setGameState] = useState('welcome'); // 'welcome' | 'playing' | 'result'
+            const [gameState, setGameState] = useState('welcome');
             const [nickname, setNickname] = useState('');
             const [score, setScore] = useState(0);
             const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
@@ -138,14 +141,22 @@
             const [isAnswerCorrect, setIsAnswerCorrect] = useState(null);
             const [loadingLeaderboard, setLoadingLeaderboard] = useState(false);
             const [inputError, setInputError] = useState(false);
+            const [authError, setAuthError] = useState(null); // 인증 에러 상태 추가
+            const [dbError, setDbError] = useState(null);     // DB 에러 상태 추가
 
             // Auth Initialization
             useEffect(() => {
                 const initAuth = async () => {
-                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                        await signInWithCustomToken(auth, __initial_auth_token);
-                    } else {
-                        await signInAnonymously(auth);
+                    try {
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            // GitHub Pages 등 외부 환경에서는 익명 로그인이 활성화되어 있어야 합니다.
+                            await signInAnonymously(auth);
+                        }
+                    } catch (error) {
+                        console.error("Auth Error:", error);
+                        setAuthError("로그인에 실패했습니다. Firebase Console에서 익명 인증(Anonymous Auth)이 활성화되어 있는지 확인해주세요.");
                     }
                 };
                 initAuth();
@@ -157,6 +168,7 @@
             useEffect(() => {
                 if (!user) return;
                 setLoadingLeaderboard(true);
+                setDbError(null);
                 
                 // Firestore Path: artifacts/{appId}/public/data/scores
                 const scoresRef = collection(db, 'artifacts', appId, 'public', 'data', 'scores');
@@ -167,13 +179,18 @@
                         scores.push({ id: doc.id, ...doc.data() });
                     });
                     
-                    // Client-side sorting for Leaderboard (descending score)
                     scores.sort((a, b) => b.score - a.score);
                     setLeaderboard(scores.slice(0, 100)); // Top 100
                     setLoadingLeaderboard(false);
                 }, (error) => {
                     console.error("Leaderboard fetch error:", error);
                     setLoadingLeaderboard(false);
+                    // 권한 에러 등을 사용자에게 알림
+                    if (error.code === 'permission-denied') {
+                        setDbError("데이터를 불러올 권한이 없습니다. Firestore 규칙(Rules)을 확인해주세요.");
+                    } else {
+                        setDbError("랭킹을 불러오는데 실패했습니다.");
+                    }
                 });
 
                 return () => unsubscribe();
@@ -196,15 +213,14 @@
             const startGame = () => {
                 if (!nickname.trim()) {
                     setInputError(true);
-                    setTimeout(() => setInputError(false), 500); // Reset shake animation
+                    setTimeout(() => setInputError(false), 500);
                     return;
                 }
-                // Shuffle questions
                 const shuffled = [...TOEIC_DATA].sort(() => 0.5 - Math.random());
                 setShuffledQuestions(shuffled);
                 setCurrentQuestionIdx(0);
                 setScore(0);
-                setTimeLeft(10); // 10 seconds per question
+                setTimeLeft(10);
                 setGameState('playing');
                 setIsTimerRunning(true);
                 setSelectedAnswer(null);
@@ -261,6 +277,7 @@
                         });
                     } catch (e) {
                         console.error("Error saving score:", e);
+                        // 저장은 실패해도 게임 결과는 보여줌
                     }
                 }
             };
@@ -303,23 +320,40 @@
                         </button>
                     </div>
 
+                    {/* 에러 메시지 표시 영역 */}
+                    {(authError || dbError) && (
+                        <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-600 max-w-sm w-full flex items-start gap-2">
+                            <AlertTriangle className="w-5 h-5 shrink-0" />
+                            <div className="text-left">
+                                <p className="font-bold">연결 오류</p>
+                                <p>{authError || dbError}</p>
+                            </div>
+                        </div>
+                    )}
+
                     <div className="mt-8 p-4 bg-white rounded-xl shadow-sm border border-slate-100 max-w-sm w-full">
                         <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3 flex items-center justify-center gap-1">
                             <Trophy className="w-4 h-4 text-yellow-500" /> 실시간 랭킹 Top 3
                         </h3>
                         <div className="space-y-2">
-                            {leaderboard.slice(0, 3).map((record, idx) => (
-                                <div key={idx} className="flex items-center justify-between text-sm bg-slate-50 p-2 rounded-lg">
-                                    <span className="flex items-center gap-2 font-medium text-slate-700">
-                                        <span className={`w-6 h-6 flex items-center justify-center rounded-full text-xs text-white font-bold shadow-sm ${idx === 0 ? 'bg-yellow-400' : idx === 1 ? 'bg-slate-400' : 'bg-orange-400'}`}>
-                                            {idx + 1}
-                                        </span>
-                                        {record.nickname}
-                                    </span>
-                                    <span className="font-bold text-blue-600">{record.score}점</span>
-                                </div>
-                            ))}
-                            {leaderboard.length === 0 && <p className="text-slate-400 text-xs">아직 기록이 없습니다. 1등에 도전하세요!</p>}
+                            {loadingLeaderboard ? (
+                                <p className="text-xs text-slate-400">로딩 중...</p>
+                            ) : (
+                                <>
+                                    {leaderboard.slice(0, 3).map((record, idx) => (
+                                        <div key={idx} className="flex items-center justify-between text-sm bg-slate-50 p-2 rounded-lg">
+                                            <span className="flex items-center gap-2 font-medium text-slate-700">
+                                                <span className={`w-6 h-6 flex items-center justify-center rounded-full text-xs text-white font-bold shadow-sm ${idx === 0 ? 'bg-yellow-400' : idx === 1 ? 'bg-slate-400' : 'bg-orange-400'}`}>
+                                                    {idx + 1}
+                                                </span>
+                                                {record.nickname}
+                                            </span>
+                                            <span className="font-bold text-blue-600">{record.score}점</span>
+                                        </div>
+                                    ))}
+                                    {leaderboard.length === 0 && !dbError && <p className="text-slate-400 text-xs">아직 기록이 없습니다. 1등에 도전하세요!</p>}
+                                </>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -508,7 +542,7 @@
 
                     {/* Main Content */}
                     <main className="flex-1 max-w-6xl mx-auto w-full p-4 md:p-6 flex flex-col justify-center">
-                        {!user ? (
+                        {!user && !authError ? (
                             <div className="flex flex-col items-center justify-center h-[50vh]">
                                 <div className="animate-spin w-10 h-10 border-4 border-slate-200 border-t-blue-500 rounded-full mb-4"></div>
                                 <p className="text-slate-500 font-medium">게임 서버 연결 중...</p>
