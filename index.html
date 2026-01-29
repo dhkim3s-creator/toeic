@@ -1,465 +1,537 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, User, signInWithCustomToken } from 'firebase/auth';
-import { 
-  getFirestore, 
-  collection, 
-  addDoc, 
-  onSnapshot, 
-  serverTimestamp, 
-  query,
-  limit
-} from 'firebase/firestore';
-import { Trophy, Clock, CheckCircle, XCircle, Play, BookOpen, Users, Award, RotateCcw } from 'lucide-react';
-
-// --- Firebase Configuration & Initialization ---
-const firebaseConfig = apiKey: "AIzaSyCvJyMMT0TCiiFgHvXwAjmj_Vup0AXH2J0",
-  authDomain: "toic-study.firebaseapp.com",
-  databaseURL: "https://toic-study-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "toic-study",
-  storageBucket: "toic-study.firebasestorage.app",
-  messagingSenderId: "257424739466",
-  appId: "1:257424739466:web:d2a9bf28cf06861855f173",
-  measurementId: "G-QY9WFQZET3"
-
-// --- Game Data (TOEIC Vocabulary) ---
-// 실제 TOEIC 빈출 단어 30개 샘플
-const TOEIC_DATA = [
-  { id: 1, word: "Implement", meaning: "시행하다", options: ["시행하다", "방해하다", "암시하다", "향상시키다"] },
-  { id: 2, word: "Mandatory", meaning: "의무적인", options: ["선택적인", "의무적인", "일시적인", "만족하는"] },
-  { id: 3, word: "Revenue", meaning: "수익", options: ["비용", "수익", "복수", "장소"] },
-  { id: 4, word: "Alternative", meaning: "대안", options: ["대안", "변경", "경고", "동의"] },
-  { id: 5, word: "Comprehensive", meaning: "포괄적인", options: ["이해하는", "포괄적인", "경쟁력있는", "간결한"] },
-  { id: 6, word: "Incentive", meaning: "장려금", options: ["장려금", "통찰력", "입구", "발명"] },
-  { id: 7, word: "Tentative", meaning: "잠정적인", options: ["확정된", "잠정적인", "적극적인", "값비싼"] },
-  { id: 8, word: "Exclusively", meaning: "독점적으로", options: ["독점적으로", "과도하게", "정확하게", "친절하게"] },
-  { id: 9, word: "Facilitate", meaning: "용이하게 하다", options: ["용이하게 하다", "직면하다", "망설이다", "축하하다"] },
-  { id: 10, word: "Recruit", meaning: "모집하다", options: ["거절하다", "모집하다", "기록하다", "후퇴하다"] },
-  { id: 11, word: "Negotiation", meaning: "협상", options: ["무시", "협상", "부정", "탐색"] },
-  { id: 12, word: "Vulnerable", meaning: "취약한", options: ["강력한", "취약한", "귀중한", "다양한"] },
-  { id: 13, word: "Deduct", meaning: "공제하다", options: ["공제하다", "수행하다", "유도하다", "생산하다"] },
-  { id: 14, word: "Unanimous", meaning: "만장일치의", options: ["익명의", "만장일치의", "애매한", "거대한"] },
-  { id: 15, word: "Prospective", meaning: "장래의", options: ["관점", "존경하는", "장래의", "번영하는"] },
-  { id: 16, word: "Commence", meaning: "시작하다", options: ["끝내다", "논평하다", "시작하다", "추천하다"] },
-  { id: 17, word: "Reimburse", meaning: "변제하다", options: ["재사용하다", "변제하다", "기억하다", "강화하다"] },
-  { id: 18, word: "Stringent", meaning: "엄격한", options: ["엄격한", "낯선", "강한", "직선의"] },
-  { id: 19, word: "Allocate", meaning: "할당하다", options: ["위치시키다", "할당하다", "허용하다", "바꾸다"] },
-  { id: 20, word: "Compliance", meaning: "준수", options: ["불평", "준수", "완료", "칭찬"] },
-  { id: 21, word: "Discrepancy", meaning: "불일치", options: ["불일치", "설명", "재량", "분배"] },
-  { id: 22, word: "Exempt", meaning: "면제된", options: ["예시", "시도", "면제된", "기대하는"] },
-  { id: 23, word: "Fluctuate", meaning: "변동하다", options: ["평평하게 하다", "변동하다", "흐르다", "날다"] },
-  { id: 24, word: "Merchandise", meaning: "상품", options: ["상인", "기계", "상품", "합병"] },
-  { id: 25, word: "Outstanding", meaning: "미지불된/뛰어난", options: ["외부의", "서있는", "미지불된/뛰어난", "오래된"] },
-  { id: 26, word: "Postpone", meaning: "연기하다", options: ["게시하다", "연기하다", "위치하다", "제안하다"] },
-  { id: 27, word: "Valid", meaning: "유효한", options: ["무효의", "가치있는", "유효한", "거대한"] },
-  { id: 28, word: "Warranty", meaning: "보증", options: ["경고", "전사", "보증", "걱정"] },
-  { id: 29, word: "Substantial", meaning: "상당한", options: ["물질의", "상당한", "대체할 수 있는", "미세한"] },
-  { id: 30, word: "Terminate", meaning: "종료하다", options: ["종료하다", "기간", "결정하다", "모방하다"] },
-];
-
-// --- Types ---
-type GameState = 'welcome' | 'playing' | 'result';
-type ScoreRecord = {
-  id?: string;
-  nickname: string;
-  score: number;
-  maxScore: number;
-  timestamp: any;
-  accuracy: string;
-};
-
-// --- Components ---
-
-export default function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [gameState, setGameState] = useState<GameState>('welcome');
-  const [nickname, setNickname] = useState('');
-  const [score, setScore] = useState(0);
-  const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
-  const [timeLeft, setTimeLeft] = useState(15);
-  const [isTimerRunning, setIsTimerRunning] = useState(false);
-  const [leaderboard, setLeaderboard] = useState<ScoreRecord[]>([]);
-  const [shuffledQuestions, setShuffledQuestions] = useState(TOEIC_DATA);
-  const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
-  const [isAnswerCorrect, setIsAnswerCorrect] = useState<boolean | null>(null);
-  const [loadingLeaderboard, setLoadingLeaderboard] = useState(false);
-
-  // Auth Initialization
-  useEffect(() => {
-    const initAuth = async () => {
-      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        await signInWithCustomToken(auth, __initial_auth_token);
-      } else {
-        await signInAnonymously(auth);
-      }
-    };
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, (u) => setUser(u));
-    return () => unsubscribe();
-  }, []);
-
-  // Leaderboard Listener
-  useEffect(() => {
-    if (!user) return;
-    setLoadingLeaderboard(true);
-    // Rule 1: Correct Path
-    const scoresRef = collection(db, 'artifacts', appId, 'public', 'data', 'scores');
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TOEIC Voca Challenge</title>
     
-    // Rule 2: Simple Query (No complex orderBy in query to avoid index issues)
-    const unsubscribe = onSnapshot(scoresRef, (snapshot) => {
-      const scores: ScoreRecord[] = [];
-      snapshot.forEach((doc) => {
-        scores.push({ id: doc.id, ...doc.data() } as ScoreRecord);
-      });
-      
-      // Client-side sorting for Leaderboard
-      scores.sort((a, b) => b.score - a.score);
-      setLeaderboard(scores.slice(0, 100)); // Top 100
-      setLoadingLeaderboard(false);
-    }, (error) => {
-      console.error("Leaderboard fetch error:", error);
-      setLoadingLeaderboard(false);
-    });
-
-    return () => unsubscribe();
-  }, [user]);
-
-  // Timer Logic
-  useEffect(() => {
-    let timer: NodeJS.Timeout;
-    if (isTimerRunning && timeLeft > 0) {
-      timer = setInterval(() => {
-        setTimeLeft((prev) => prev - 1);
-      }, 1000);
-    } else if (timeLeft === 0 && isTimerRunning) {
-      handleAnswerTimeOut();
-    }
-    return () => clearInterval(timer);
-  }, [isTimerRunning, timeLeft]);
-
-  // Game Logic Functions
-  const startGame = () => {
-    if (!nickname.trim()) {
-      alert("닉네임을 입력해주세요!");
-      return;
-    }
-    // Shuffle questions
-    const shuffled = [...TOEIC_DATA].sort(() => 0.5 - Math.random());
-    setShuffledQuestions(shuffled);
-    setCurrentQuestionIdx(0);
-    setScore(0);
-    setTimeLeft(10); // 10 seconds per question
-    setGameState('playing');
-    setIsTimerRunning(true);
-    setSelectedAnswer(null);
-    setIsAnswerCorrect(null);
-  };
-
-  const handleAnswerTimeOut = () => {
-    setIsTimerRunning(false);
-    setIsAnswerCorrect(false); // Time out counts as wrong
-    setTimeout(nextQuestion, 1500);
-  };
-
-  const handleAnswerClick = (option: string) => {
-    if (selectedAnswer !== null) return; // Prevent double click
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     
-    setIsTimerRunning(false);
-    setSelectedAnswer(option);
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
-    const correct = option === shuffledQuestions[currentQuestionIdx].meaning;
-    setIsAnswerCorrect(correct);
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
     
-    if (correct) {
-      // Score calculation: Base 10 + Time bonus
-      setScore((prev) => prev + 10 + Math.ceil(timeLeft / 2));
-    }
+    <!-- Custom Animations -->
+    <style>
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in {
+            animation: fadeIn 0.5s ease-out forwards;
+        }
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+        .animate-shake {
+            animation: shake 0.2s ease-in-out 0s 2;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans">
+    <div id="root"></div>
 
-    setTimeout(nextQuestion, 1500);
-  };
+    <script type="text/babel" data-type="module">
+        // --- Firebase Imports ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-  const nextQuestion = () => {
-    if (currentQuestionIdx < shuffledQuestions.length - 1) {
-      setCurrentQuestionIdx((prev) => prev + 1);
-      setTimeLeft(10);
-      setSelectedAnswer(null);
-      setIsAnswerCorrect(null);
-      setIsTimerRunning(true);
-    } else {
-      endGame();
-    }
-  };
+        // --- Icon Components (Inline SVGs to replace lucide-react) ---
+        const IconBase = ({ children, className }) => (
+            <svg 
+                xmlns="http://www.w3.org/2000/svg" 
+                viewBox="0 0 24 24" 
+                fill="none" 
+                stroke="currentColor" 
+                strokeWidth="2" 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                className={className}
+            >
+                {children}
+            </svg>
+        );
 
-  const endGame = async () => {
-    setGameState('result');
-    setIsTimerRunning(false);
+        const Trophy = ({ className }) => <IconBase className={className}><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></IconBase>;
+        const BookOpen = ({ className }) => <IconBase className={className}><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></IconBase>;
+        const Play = ({ className }) => <IconBase className={className}><polygon points="5 3 19 12 5 21 5 3"/></IconBase>;
+        const CheckCircle = ({ className }) => <IconBase className={className}><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></IconBase>;
+        const XCircle = ({ className }) => <IconBase className={className}><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></IconBase>;
+        const Award = ({ className }) => <IconBase className={className}><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></IconBase>;
+        const RotateCcw = ({ className }) => <IconBase className={className}><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></IconBase>;
+        const Users = ({ className }) => <IconBase className={className}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></IconBase>;
 
-    if (user && nickname) {
-      try {
-        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'scores'), {
-          nickname: nickname,
-          score: score,
-          maxScore: shuffledQuestions.length * 15, // Approx max
-          timestamp: serverTimestamp(),
-          userId: user.uid, // Store for reference, but display nickname
-          accuracy: `${Math.round((score / (shuffledQuestions.length * 15)) * 100)}%` // Rough calc
-        });
-      } catch (e) {
-        console.error("Error saving score:", e);
-      }
-    }
-  };
+        // --- Data ---
+        const TOEIC_DATA = [
+          { id: 1, word: "Implement", meaning: "시행하다", options: ["시행하다", "방해하다", "암시하다", "향상시키다"] },
+          { id: 2, word: "Mandatory", meaning: "의무적인", options: ["선택적인", "의무적인", "일시적인", "만족하는"] },
+          { id: 3, word: "Revenue", meaning: "수익", options: ["비용", "수익", "복수", "장소"] },
+          { id: 4, word: "Alternative", meaning: "대안", options: ["대안", "변경", "경고", "동의"] },
+          { id: 5, word: "Comprehensive", meaning: "포괄적인", options: ["이해하는", "포괄적인", "경쟁력있는", "간결한"] },
+          { id: 6, word: "Incentive", meaning: "장려금", options: ["장려금", "통찰력", "입구", "발명"] },
+          { id: 7, word: "Tentative", meaning: "잠정적인", options: ["확정된", "잠정적인", "적극적인", "값비싼"] },
+          { id: 8, word: "Exclusively", meaning: "독점적으로", options: ["독점적으로", "과도하게", "정확하게", "친절하게"] },
+          { id: 9, word: "Facilitate", meaning: "용이하게 하다", options: ["용이하게 하다", "직면하다", "망설이다", "축하하다"] },
+          { id: 10, word: "Recruit", meaning: "모집하다", options: ["거절하다", "모집하다", "기록하다", "후퇴하다"] },
+          { id: 11, word: "Negotiation", meaning: "협상", options: ["무시", "협상", "부정", "탐색"] },
+          { id: 12, word: "Vulnerable", meaning: "취약한", options: ["강력한", "취약한", "귀중한", "다양한"] },
+          { id: 13, word: "Deduct", meaning: "공제하다", options: ["공제하다", "수행하다", "유도하다", "생산하다"] },
+          { id: 14, word: "Unanimous", meaning: "만장일치의", options: ["익명의", "만장일치의", "애매한", "거대한"] },
+          { id: 15, word: "Prospective", meaning: "장래의", options: ["관점", "존경하는", "장래의", "번영하는"] },
+          { id: 16, word: "Commence", meaning: "시작하다", options: ["끝내다", "논평하다", "시작하다", "추천하다"] },
+          { id: 17, word: "Reimburse", meaning: "변제하다", options: ["재사용하다", "변제하다", "기억하다", "강화하다"] },
+          { id: 18, word: "Stringent", meaning: "엄격한", options: ["엄격한", "낯선", "강한", "직선의"] },
+          { id: 19, word: "Allocate", meaning: "할당하다", options: ["위치시키다", "할당하다", "허용하다", "바꾸다"] },
+          { id: 20, word: "Compliance", meaning: "준수", options: ["불평", "준수", "완료", "칭찬"] },
+          { id: 21, word: "Discrepancy", meaning: "불일치", options: ["불일치", "설명", "재량", "분배"] },
+          { id: 22, word: "Exempt", meaning: "면제된", options: ["예시", "시도", "면제된", "기대하는"] },
+          { id: 23, word: "Fluctuate", meaning: "변동하다", options: ["평평하게 하다", "변동하다", "흐르다", "날다"] },
+          { id: 24, word: "Merchandise", meaning: "상품", options: ["상인", "기계", "상품", "합병"] },
+          { id: 25, word: "Outstanding", meaning: "미지불된/뛰어난", options: ["외부의", "서있는", "미지불된/뛰어난", "오래된"] },
+          { id: 26, word: "Postpone", meaning: "연기하다", options: ["게시하다", "연기하다", "위치하다", "제안하다"] },
+          { id: 27, word: "Valid", meaning: "유효한", options: ["무효의", "가치있는", "유효한", "거대한"] },
+          { id: 28, word: "Warranty", meaning: "보증", options: ["경고", "전사", "보증", "걱정"] },
+          { id: 29, word: "Substantial", meaning: "상당한", options: ["물질의", "상당한", "대체할 수 있는", "미세한"] },
+          { id: 30, word: "Terminate", meaning: "종료하다", options: ["종료하다", "기간", "결정하다", "모방하다"] },
+        ];
 
-  const restartGame = () => {
-    setGameState('welcome');
-  };
+        // --- Firebase Init ---
+        const apiKey = ""; // Provided by environment
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "AIzaSyCvJyMMT0TCiiFgHvXwAjmj_Vup0AXH2J0",
+            authDomain: "toic-study.firebaseapp.com",
+            databaseURL: "https://toic-study-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "toic-study",
+            storageBucket: "toic-study.firebasestorage.app",
+            messagingSenderId: "257424739466",
+            appId: "1:257424739466:web:d2a9bf28cf06861855f173",
+            measurementId: "G-QY9WFQZET3"
+        };
 
-  // Render Helpers
-  const renderWelcome = () => (
-    <div className="flex flex-col items-center justify-center min-h-[60vh] text-center space-y-8 animate-fade-in">
-      <div className="bg-blue-600 p-6 rounded-full shadow-xl mb-4">
-        <BookOpen className="w-16 h-16 text-white" />
-      </div>
-      <div>
-        <h1 className="text-4xl font-extrabold text-slate-800 mb-2">TOEIC Voca Challenge</h1>
-        <p className="text-slate-500 text-lg">600명의 친구들과 경쟁하여 어휘력을 증명하세요!</p>
-      </div>
-      
-      <div className="w-full max-w-xs space-y-4">
-        <input 
-          type="text" 
-          placeholder="닉네임을 입력하세요 (예: 토익만점)" 
-          className="w-full px-6 py-4 rounded-xl border-2 border-slate-200 focus:border-blue-500 focus:ring-4 focus:ring-blue-100 outline-none text-lg transition-all"
-          value={nickname}
-          onChange={(e) => setNickname(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && startGame()}
-          maxLength={10}
-        />
-        <button 
-          onClick={startGame}
-          disabled={!nickname.trim()}
-          className="w-full py-4 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-bold rounded-xl text-lg shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-1 flex items-center justify-center gap-2"
-        >
-          <Play className="w-5 h-5" />
-          게임 시작
-        </button>
-      </div>
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        // Use global app ID if available, otherwise default string
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'toic-study-app';
 
-      <div className="mt-8 p-4 bg-slate-50 rounded-lg border border-slate-100 max-w-sm w-full">
-        <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">실시간 랭킹 Top 3</h3>
-        <div className="space-y-2">
-          {leaderboard.slice(0, 3).map((record, idx) => (
-            <div key={idx} className="flex items-center justify-between text-sm">
-              <span className="flex items-center gap-2 font-medium text-slate-700">
-                <span className={`w-5 h-5 flex items-center justify-center rounded text-xs text-white ${idx === 0 ? 'bg-yellow-400' : idx === 1 ? 'bg-slate-400' : 'bg-orange-400'}`}>
-                  {idx + 1}
-                </span>
-                {record.nickname}
-              </span>
-              <span className="font-bold text-blue-600">{record.score}점</span>
-            </div>
-          ))}
-          {leaderboard.length === 0 && <p className="text-slate-400 text-xs">아직 기록이 없습니다. 1등에 도전하세요!</p>}
-        </div>
-      </div>
-    </div>
-  );
-
-  const renderGame = () => {
-    const question = shuffledQuestions[currentQuestionIdx];
-    const progress = ((currentQuestionIdx + 1) / shuffledQuestions.length) * 100;
-
-    return (
-      <div className="max-w-2xl mx-auto w-full">
-        {/* Header */}
-        <div className="flex justify-between items-center mb-6">
-          <div className="flex items-center gap-2 bg-slate-100 px-4 py-2 rounded-full">
-            <Trophy className="w-4 h-4 text-yellow-500" />
-            <span className="font-bold text-slate-700">{score}점</span>
-          </div>
-          <div className="flex items-center gap-2 bg-slate-100 px-4 py-2 rounded-full">
-            <span className="text-sm font-semibold text-slate-500">
-              {currentQuestionIdx + 1} / {shuffledQuestions.length}
-            </span>
-          </div>
-        </div>
-
-        {/* Progress Bar */}
-        <div className="w-full bg-slate-200 h-2 rounded-full mb-8 overflow-hidden">
-          <div 
-            className="bg-blue-500 h-full transition-all duration-500 ease-out"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-
-        {/* Question Card */}
-        <div className="bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden mb-6 relative">
-          {/* Timer Bar */}
-          <div 
-            className={`absolute top-0 left-0 h-1 transition-all duration-1000 ease-linear ${timeLeft <= 3 ? 'bg-red-500' : 'bg-blue-400'}`}
-            style={{ width: `${(timeLeft / 10) * 100}%` }}
-          />
-          
-          <div className="p-8 text-center">
-            <div className="text-sm text-slate-400 font-semibold uppercase tracking-widest mb-2">Translate this word</div>
-            <h2 className="text-5xl font-black text-slate-800 mb-8">{question.word}</h2>
+        // --- Main Component ---
+        function App() {
+            const { useState, useEffect } = React;
             
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {question.options.map((option, idx) => {
-                let btnClass = "py-4 px-6 rounded-xl text-lg font-bold border-2 transition-all transform active:scale-95 hover:bg-slate-50";
+            const [user, setUser] = useState(null);
+            const [gameState, setGameState] = useState('welcome'); // 'welcome' | 'playing' | 'result'
+            const [nickname, setNickname] = useState('');
+            const [score, setScore] = useState(0);
+            const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
+            const [timeLeft, setTimeLeft] = useState(15);
+            const [isTimerRunning, setIsTimerRunning] = useState(false);
+            const [leaderboard, setLeaderboard] = useState([]);
+            const [shuffledQuestions, setShuffledQuestions] = useState(TOEIC_DATA);
+            const [selectedAnswer, setSelectedAnswer] = useState(null);
+            const [isAnswerCorrect, setIsAnswerCorrect] = useState(null);
+            const [loadingLeaderboard, setLoadingLeaderboard] = useState(false);
+            const [inputError, setInputError] = useState(false);
+
+            // Auth Initialization
+            useEffect(() => {
+                const initAuth = async () => {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                };
+                initAuth();
+                const unsubscribe = onAuthStateChanged(auth, (u) => setUser(u));
+                return () => unsubscribe();
+            }, []);
+
+            // Leaderboard Listener
+            useEffect(() => {
+                if (!user) return;
+                setLoadingLeaderboard(true);
                 
-                if (selectedAnswer) {
-                  if (option === question.meaning) {
-                    btnClass = "py-4 px-6 rounded-xl text-lg font-bold border-2 border-green-500 bg-green-50 text-green-700";
-                  } else if (selectedAnswer === option) {
-                    btnClass = "py-4 px-6 rounded-xl text-lg font-bold border-2 border-red-500 bg-red-50 text-red-700";
-                  } else {
-                    btnClass = "py-4 px-6 rounded-xl text-lg font-bold border-2 border-slate-100 text-slate-300";
-                  }
-                } else {
-                  btnClass += " border-slate-200 text-slate-700 hover:border-blue-300";
+                // Firestore Path: artifacts/{appId}/public/data/scores
+                const scoresRef = collection(db, 'artifacts', appId, 'public', 'data', 'scores');
+                
+                const unsubscribe = onSnapshot(scoresRef, (snapshot) => {
+                    const scores = [];
+                    snapshot.forEach((doc) => {
+                        scores.push({ id: doc.id, ...doc.data() });
+                    });
+                    
+                    // Client-side sorting for Leaderboard (descending score)
+                    scores.sort((a, b) => b.score - a.score);
+                    setLeaderboard(scores.slice(0, 100)); // Top 100
+                    setLoadingLeaderboard(false);
+                }, (error) => {
+                    console.error("Leaderboard fetch error:", error);
+                    setLoadingLeaderboard(false);
+                });
+
+                return () => unsubscribe();
+            }, [user]);
+
+            // Timer Logic
+            useEffect(() => {
+                let timer;
+                if (isTimerRunning && timeLeft > 0) {
+                    timer = setInterval(() => {
+                        setTimeLeft((prev) => prev - 1);
+                    }, 1000);
+                } else if (timeLeft === 0 && isTimerRunning) {
+                    handleAnswerTimeOut();
+                }
+                return () => clearInterval(timer);
+            }, [isTimerRunning, timeLeft]);
+
+            // Game Logic
+            const startGame = () => {
+                if (!nickname.trim()) {
+                    setInputError(true);
+                    setTimeout(() => setInputError(false), 500); // Reset shake animation
+                    return;
+                }
+                // Shuffle questions
+                const shuffled = [...TOEIC_DATA].sort(() => 0.5 - Math.random());
+                setShuffledQuestions(shuffled);
+                setCurrentQuestionIdx(0);
+                setScore(0);
+                setTimeLeft(10); // 10 seconds per question
+                setGameState('playing');
+                setIsTimerRunning(true);
+                setSelectedAnswer(null);
+                setIsAnswerCorrect(null);
+            };
+
+            const handleAnswerTimeOut = () => {
+                setIsTimerRunning(false);
+                setIsAnswerCorrect(false); 
+                setTimeout(nextQuestion, 1500);
+            };
+
+            const handleAnswerClick = (option) => {
+                if (selectedAnswer !== null) return; 
+                
+                setIsTimerRunning(false);
+                setSelectedAnswer(option);
+                
+                const correct = option === shuffledQuestions[currentQuestionIdx].meaning;
+                setIsAnswerCorrect(correct);
+                
+                if (correct) {
+                    setScore((prev) => prev + 10 + Math.ceil(timeLeft / 2));
                 }
 
+                setTimeout(nextQuestion, 1500);
+            };
+
+            const nextQuestion = () => {
+                if (currentQuestionIdx < shuffledQuestions.length - 1) {
+                    setCurrentQuestionIdx((prev) => prev + 1);
+                    setTimeLeft(10);
+                    setSelectedAnswer(null);
+                    setIsAnswerCorrect(null);
+                    setIsTimerRunning(true);
+                } else {
+                    endGame();
+                }
+            };
+
+            const endGame = async () => {
+                setGameState('result');
+                setIsTimerRunning(false);
+
+                if (user && nickname) {
+                    try {
+                        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'scores'), {
+                            nickname: nickname,
+                            score: score,
+                            maxScore: shuffledQuestions.length * 15,
+                            timestamp: serverTimestamp(),
+                            userId: user.uid,
+                            accuracy: `${Math.round((score / (shuffledQuestions.length * 15)) * 100)}%`
+                        });
+                    } catch (e) {
+                        console.error("Error saving score:", e);
+                    }
+                }
+            };
+
+            const restartGame = () => {
+                setGameState('welcome');
+            };
+
+            // Render Functions
+            const renderWelcome = () => (
+                <div className="flex flex-col items-center justify-center min-h-[60vh] text-center space-y-8 animate-fade-in">
+                    <div className="bg-blue-600 p-6 rounded-full shadow-xl mb-4 transform hover:scale-105 transition-transform duration-300">
+                        <BookOpen className="w-16 h-16 text-white" />
+                    </div>
+                    <div>
+                        <h1 className="text-4xl font-extrabold text-slate-800 mb-2">TOEIC Voca Challenge</h1>
+                        <p className="text-slate-500 text-lg">친구들과 경쟁하며 필수 단어를 마스터하세요!</p>
+                    </div>
+                    
+                    <div className="w-full max-w-xs space-y-4">
+                        <input 
+                            type="text" 
+                            placeholder="닉네임을 입력하세요" 
+                            className={`w-full px-6 py-4 rounded-xl border-2 outline-none text-lg transition-all ${
+                                inputError 
+                                ? 'border-red-500 bg-red-50 animate-shake focus:ring-red-200' 
+                                : 'border-slate-200 focus:border-blue-500 focus:ring-4 focus:ring-blue-100'
+                            }`}
+                            value={nickname}
+                            onChange={(e) => setNickname(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && startGame()}
+                            maxLength={10}
+                        />
+                        <button 
+                            onClick={startGame}
+                            className="w-full py-4 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold rounded-xl text-lg shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-1 flex items-center justify-center gap-2"
+                        >
+                            <Play className="w-5 h-5" />
+                            게임 시작
+                        </button>
+                    </div>
+
+                    <div className="mt-8 p-4 bg-white rounded-xl shadow-sm border border-slate-100 max-w-sm w-full">
+                        <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3 flex items-center justify-center gap-1">
+                            <Trophy className="w-4 h-4 text-yellow-500" /> 실시간 랭킹 Top 3
+                        </h3>
+                        <div className="space-y-2">
+                            {leaderboard.slice(0, 3).map((record, idx) => (
+                                <div key={idx} className="flex items-center justify-between text-sm bg-slate-50 p-2 rounded-lg">
+                                    <span className="flex items-center gap-2 font-medium text-slate-700">
+                                        <span className={`w-6 h-6 flex items-center justify-center rounded-full text-xs text-white font-bold shadow-sm ${idx === 0 ? 'bg-yellow-400' : idx === 1 ? 'bg-slate-400' : 'bg-orange-400'}`}>
+                                            {idx + 1}
+                                        </span>
+                                        {record.nickname}
+                                    </span>
+                                    <span className="font-bold text-blue-600">{record.score}점</span>
+                                </div>
+                            ))}
+                            {leaderboard.length === 0 && <p className="text-slate-400 text-xs">아직 기록이 없습니다. 1등에 도전하세요!</p>}
+                        </div>
+                    </div>
+                </div>
+            );
+
+            const renderGame = () => {
+                const question = shuffledQuestions[currentQuestionIdx];
+                const progress = ((currentQuestionIdx + 1) / shuffledQuestions.length) * 100;
+
                 return (
-                  <button 
-                    key={idx}
-                    onClick={() => handleAnswerClick(option)}
-                    disabled={selectedAnswer !== null}
-                    className={btnClass}
-                  >
-                    {option}
-                  </button>
+                    <div className="max-w-2xl mx-auto w-full animate-fade-in">
+                        {/* Header */}
+                        <div className="flex justify-between items-center mb-6">
+                            <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-full shadow-sm border border-slate-100">
+                                <Trophy className="w-4 h-4 text-yellow-500" />
+                                <span className="font-bold text-slate-700">{score}점</span>
+                            </div>
+                            <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-full shadow-sm border border-slate-100">
+                                <span className="text-sm font-semibold text-slate-500">
+                                    {currentQuestionIdx + 1} / {shuffledQuestions.length}
+                                </span>
+                            </div>
+                        </div>
+
+                        {/* Progress Bar */}
+                        <div className="w-full bg-slate-200 h-2 rounded-full mb-8 overflow-hidden">
+                            <div 
+                                className="bg-blue-500 h-full transition-all duration-500 ease-out"
+                                style={{ width: `${progress}%` }}
+                            />
+                        </div>
+
+                        {/* Question Card */}
+                        <div className="bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden mb-6 relative">
+                            {/* Timer Bar */}
+                            <div 
+                                className={`absolute top-0 left-0 h-1.5 transition-all duration-1000 ease-linear ${timeLeft <= 3 ? 'bg-red-500' : 'bg-blue-400'}`}
+                                style={{ width: `${(timeLeft / 10) * 100}%` }}
+                            />
+                            
+                            <div className="p-8 text-center">
+                                <div className="text-xs text-slate-400 font-bold uppercase tracking-widest mb-4">Translate this word</div>
+                                <h2 className="text-4xl md:text-5xl font-black text-slate-800 mb-10">{question.word}</h2>
+                                
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    {question.options.map((option, idx) => {
+                                        let btnClass = "py-4 px-6 rounded-xl text-lg font-bold border-2 transition-all transform active:scale-95 hover:bg-slate-50 duration-200";
+                                        
+                                        if (selectedAnswer) {
+                                            if (option === question.meaning) {
+                                                btnClass = "py-4 px-6 rounded-xl text-lg font-bold border-2 border-green-500 bg-green-50 text-green-700 shadow-md";
+                                            } else if (selectedAnswer === option) {
+                                                btnClass = "py-4 px-6 rounded-xl text-lg font-bold border-2 border-red-500 bg-red-50 text-red-700";
+                                            } else {
+                                                btnClass = "py-4 px-6 rounded-xl text-lg font-bold border-2 border-slate-100 text-slate-300 opacity-50";
+                                            }
+                                        } else {
+                                            btnClass += " border-slate-200 text-slate-700 hover:border-blue-300 hover:shadow-md";
+                                        }
+
+                                        return (
+                                            <button 
+                                                key={idx}
+                                                onClick={() => handleAnswerClick(option)}
+                                                disabled={selectedAnswer !== null}
+                                                className={btnClass}
+                                            >
+                                                {option}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Feedback Area */}
+                        <div className="h-12 flex justify-center items-center">
+                            {selectedAnswer && (
+                                <div className={`flex items-center gap-2 px-6 py-2 rounded-full shadow-lg text-sm font-bold animate-fade-in ${isAnswerCorrect ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                    {isAnswerCorrect ? <CheckCircle className="w-5 h-5" /> : <XCircle className="w-5 h-5" />}
+                                    {isAnswerCorrect ? "정답입니다!" : `정답: "${question.meaning}"`}
+                                </div>
+                            )}
+                        </div>
+                    </div>
                 );
-              })}
-            </div>
-          </div>
-        </div>
+            };
 
-        {/* Feedback Area */}
-        <div className="h-8 text-center">
-          {selectedAnswer && (
-            <div className={`inline-flex items-center gap-2 px-4 py-1 rounded-full text-sm font-bold ${isAnswerCorrect ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-              {isAnswerCorrect ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
-              {isAnswerCorrect ? "정답입니다!" : `정답은 "${question.meaning}" 입니다.`}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
+            const renderResult = () => (
+                <div className="max-w-4xl mx-auto w-full animate-fade-in">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                        
+                        {/* Score Card */}
+                        <div className="md:col-span-1 bg-white p-8 rounded-2xl shadow-xl border border-slate-100 text-center flex flex-col items-center justify-center">
+                            <div className="w-24 h-24 bg-gradient-to-br from-yellow-100 to-yellow-50 rounded-full flex items-center justify-center mb-6 shadow-inner">
+                                <Award className="w-12 h-12 text-yellow-600" />
+                            </div>
+                            <h2 className="text-2xl font-bold text-slate-800 mb-2">{nickname}님의 점수</h2>
+                            <div className="text-5xl font-black text-blue-600 mb-8">{score}</div>
+                            <button 
+                                onClick={restartGame}
+                                className="w-full py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold flex items-center justify-center gap-2 transition-all transform hover:-translate-y-1 shadow-lg"
+                            >
+                                <RotateCcw className="w-4 h-4" />
+                                다시 도전하기
+                            </button>
+                        </div>
 
-  const renderResult = () => (
-    <div className="max-w-4xl mx-auto w-full animate-fade-in">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-        
-        {/* Score Card */}
-        <div className="md:col-span-1 bg-white p-8 rounded-2xl shadow-xl border border-slate-100 text-center flex flex-col items-center justify-center">
-          <div className="w-24 h-24 bg-yellow-100 rounded-full flex items-center justify-center mb-6">
-            <Award className="w-12 h-12 text-yellow-600" />
-          </div>
-          <h2 className="text-2xl font-bold text-slate-800 mb-2">{nickname}님의 점수</h2>
-          <div className="text-5xl font-black text-blue-600 mb-6">{score}</div>
-          <button 
-            onClick={restartGame}
-            className="w-full py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold flex items-center justify-center gap-2 transition-colors"
-          >
-            <RotateCcw className="w-4 h-4" />
-            다시 도전하기
-          </button>
-        </div>
+                        {/* Leaderboard */}
+                        <div className="md:col-span-2 bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden flex flex-col h-[500px]">
+                            <div className="p-6 bg-slate-50 border-b border-slate-100 flex justify-between items-center">
+                                <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                                    <Users className="w-5 h-5 text-blue-500" />
+                                    전체 랭킹
+                                </h3>
+                                <span className="text-xs font-medium px-2 py-1 bg-green-100 text-green-700 rounded-full flex items-center gap-1">
+                                    <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                                    LIVE
+                                </span>
+                            </div>
+                            <div className="overflow-y-auto flex-1 p-0 scrollbar-hide">
+                                {loadingLeaderboard ? (
+                                    <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-3">
+                                        <div className="w-8 h-8 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin"></div>
+                                        <p>점수 불러오는 중...</p>
+                                    </div>
+                                ) : (
+                                    <table className="w-full text-left border-collapse">
+                                        <thead className="bg-slate-50 sticky top-0 shadow-sm z-10">
+                                            <tr>
+                                                <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-wider">순위</th>
+                                                <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-wider">닉네임</th>
+                                                <th className="p-4 text-xs font-bold text-slate-400 uppercase tracking-wider text-right">점수</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {leaderboard.map((record, index) => (
+                                                <tr 
+                                                    key={index} 
+                                                    className={`border-b border-slate-50 hover:bg-blue-50/50 transition-colors ${record.nickname === nickname && record.score === score ? 'bg-blue-50' : ''}`}
+                                                >
+                                                    <td className="p-4">
+                                                        <span className={`
+                                                            inline-flex items-center justify-center w-6 h-6 rounded-full font-bold text-xs shadow-sm
+                                                            ${index === 0 ? 'bg-yellow-400 text-white' : 
+                                                              index === 1 ? 'bg-slate-400 text-white' : 
+                                                              index === 2 ? 'bg-orange-400 text-white' : 'bg-slate-100 text-slate-500'}
+                                                        `}>
+                                                            {index + 1}
+                                                        </span>
+                                                    </td>
+                                                    <td className={`p-4 font-medium flex items-center gap-2 ${record.nickname === nickname && record.score === score ? 'text-blue-600' : 'text-slate-700'}`}>
+                                                        {record.nickname}
+                                                        {record.nickname === nickname && record.score === score && <span className="text-[10px] bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full font-bold">ME</span>}
+                                                    </td>
+                                                    <td className="p-4 text-right font-bold text-slate-700">{record.score}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
 
-        {/* Leaderboard */}
-        <div className="md:col-span-2 bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden flex flex-col h-[500px]">
-          <div className="p-6 bg-slate-50 border-b border-slate-100 flex justify-between items-center">
-            <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-              <Users className="w-5 h-5 text-blue-500" />
-              전체 랭킹
-            </h3>
-            <span className="text-sm text-slate-500">실시간 업데이트 중</span>
-          </div>
-          <div className="overflow-y-auto flex-1 p-0">
-            {loadingLeaderboard ? (
-              <div className="p-8 text-center text-slate-400">점수 불러오는 중...</div>
-            ) : (
-              <table className="w-full text-left border-collapse">
-                <thead className="bg-slate-50 sticky top-0">
-                  <tr>
-                    <th className="p-4 text-xs font-bold text-slate-400 uppercase">순위</th>
-                    <th className="p-4 text-xs font-bold text-slate-400 uppercase">닉네임</th>
-                    <th className="p-4 text-xs font-bold text-slate-400 uppercase text-right">점수</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {leaderboard.map((record, index) => (
-                    <tr 
-                      key={index} 
-                      className={`border-b border-slate-50 hover:bg-blue-50/50 transition-colors ${record.nickname === nickname && record.score === score ? 'bg-blue-50' : ''}`}
-                    >
-                      <td className="p-4">
-                        <span className={`
-                          inline-flex items-center justify-center w-6 h-6 rounded font-bold text-xs
-                          ${index === 0 ? 'bg-yellow-400 text-white' : 
-                            index === 1 ? 'bg-slate-400 text-white' : 
-                            index === 2 ? 'bg-orange-400 text-white' : 'text-slate-500'}
-                        `}>
-                          {index + 1}
-                        </span>
-                      </td>
-                      <td className={`p-4 font-medium ${record.nickname === nickname ? 'text-blue-600' : 'text-slate-700'}`}>
-                        {record.nickname}
-                        {record.nickname === nickname && record.score === score && <span className="ml-2 text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">나</span>}
-                      </td>
-                      <td className="p-4 text-right font-bold text-slate-700">{record.score}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+            return (
+                <div className="min-h-screen bg-slate-50 flex flex-col">
+                    {/* Navbar */}
+                    <nav className="bg-white border-b border-slate-200 px-6 py-4 sticky top-0 z-50">
+                        <div className="max-w-6xl mx-auto flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <div className="bg-blue-600 text-white p-1.5 rounded-lg shadow-md">
+                                    <BookOpen className="w-5 h-5" />
+                                </div>
+                                <span className="font-bold text-xl tracking-tight text-slate-800">VocaChallenge</span>
+                            </div>
+                            {gameState === 'playing' && (
+                                <div className="text-sm font-medium text-slate-500 bg-slate-100 px-3 py-1 rounded-full border border-slate-200">
+                                    Player: <span className="text-slate-800 font-bold">{nickname}</span>
+                                </div>
+                            )}
+                        </div>
+                    </nav>
 
-  return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 flex flex-col">
-      {/* Navbar */}
-      <nav className="bg-white border-b border-slate-200 px-6 py-4">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="bg-blue-600 text-white p-1.5 rounded-lg">
-              <BookOpen className="w-5 h-5" />
-            </div>
-            <span className="font-bold text-xl tracking-tight">VocaChallenge</span>
-          </div>
-          {gameState === 'playing' && (
-             <div className="text-sm font-medium text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
-               Playing as: <span className="text-slate-800">{nickname}</span>
-             </div>
-          )}
-        </div>
-      </nav>
+                    {/* Main Content */}
+                    <main className="flex-1 max-w-6xl mx-auto w-full p-4 md:p-6 flex flex-col justify-center">
+                        {!user ? (
+                            <div className="flex flex-col items-center justify-center h-[50vh]">
+                                <div className="animate-spin w-10 h-10 border-4 border-slate-200 border-t-blue-500 rounded-full mb-4"></div>
+                                <p className="text-slate-500 font-medium">게임 서버 연결 중...</p>
+                            </div>
+                        ) : (
+                            <>
+                                {gameState === 'welcome' && renderWelcome()}
+                                {gameState === 'playing' && renderGame()}
+                                {gameState === 'result' && renderResult()}
+                            </>
+                        )}
+                    </main>
 
-      {/* Main Content */}
-      <main className="flex-1 max-w-6xl mx-auto w-full p-4 md:p-6 flex flex-col justify-center">
-        {!user ? (
-           <div className="text-center p-10">
-             <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"></div>
-             <p className="text-slate-500">게임 서버에 접속 중입니다...</p>
-           </div>
-        ) : (
-          <>
-            {gameState === 'welcome' && renderWelcome()}
-            {gameState === 'playing' && renderGame()}
-            {gameState === 'result' && renderResult()}
-          </>
-        )}
-      </main>
+                    {/* Footer */}
+                    <footer className="text-center py-6 text-slate-400 text-xs font-medium">
+                        TOEIC® is a registered trademark of ETS. This product is not endorsed or approved by ETS.
+                    </footer>
+                </div>
+            );
+        }
 
-      {/* Footer */}
-      <footer className="text-center py-6 text-slate-400 text-sm">
-        TOEIC® is a registered trademark of ETS. This product is not endorsed or approved by ETS.
-      </footer>
-    </div>
-  );
-}
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
